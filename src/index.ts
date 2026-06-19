@@ -11,6 +11,7 @@ const WEBHOOK = {
   READ: `${N8N_BASE_URL}/webhook/mcp-pipeline-read`,
   UPDATE: `${N8N_BASE_URL}/webhook/mcp-pipeline-update`,
   TRIGGER: `${N8N_BASE_URL}/webhook/mcp-trigger-workflow`,
+  MANAGE: `${N8N_BASE_URL}/webhook/mcp-pipeline-manage`,
 };
 
 const WORKFLOW_IDS: Record<string, string> = {
@@ -20,6 +21,7 @@ const WORKFLOW_IDS: Record<string, string> = {
   W4: "DzhKMzKIoYFUKWTl",
   W5: "WmG4h8GrOhlK7sqP",
   W6: "A0QB4WSYvuckSkSF",
+  "V2-W1": "rXlIRlBd7pXBHfQE",
 };
 
 const WORKFLOW_NAMES: Record<string, string> = {
@@ -29,18 +31,25 @@ const WORKFLOW_NAMES: Record<string, string> = {
   W4: "Video Assembly",
   W5: "YouTube Upload & Publishing",
   W6: "Performance Analytics",
+  "V2-W1": "V2 Topic Research",
 };
 
 const PIPELINE_COLUMNS = [
-  "video_id", "title", "status", "script_url", "voiceover_url",
-  "video_url", "thumbnail_url", "youtube_url", "publish_date", "created_at"
+  "title", "status", "created_at", "hook_angle", "content_pillar",
+  "target_keyword", "script_url", "script_body", "hook_score",
+  "voiceover_url", "avatar_hook_url", "avatar_cta_url", "video_url",
+  "thumbnail_url", "thumbnail_status", "youtube_url", "publish_date",
+  "video_id", "primary_keyword", "topic_summary", "total_score"
 ];
 
 interface PipelineRow {
-  video_id: string; title: string; status: string; script_url: string;
-  voiceover_url: string; video_url: string; thumbnail_url: string;
-  youtube_url: string; publish_date: string; created_at: string;
-  row_number?: number;
+  title: string; status: string; created_at: string; hook_angle: string;
+  content_pillar: string; target_keyword: string; script_url: string;
+  script_body: string; hook_score: string; voiceover_url: string;
+  avatar_hook_url: string; avatar_cta_url: string; video_url: string;
+  thumbnail_url: string; thumbnail_status: string; youtube_url: string;
+  publish_date: string; video_id: string; primary_keyword: string;
+  topic_summary: string; total_score: string; row_number?: number;
 }
 
 interface N8nExecution {
@@ -91,8 +100,9 @@ function formatPipelineTable(rows: PipelineRow[]): string {
   return [header, ...lines].join("\n");
 }
 
-const server = new McpServer({ name: "vault-pipeline-mcp", version: "1.0.0" });
+const server = new McpServer({ name: "vault-pipeline-mcp", version: "1.1.0" });
 
+// ── read_pipeline ──
 server.registerTool("read_pipeline", {
   title: "Read Pipeline Sheet",
   description: "Read all rows from the Vault Pipeline Sheet with optional status filter. Returns video_id, title, status, URLs, dates.",
@@ -114,43 +124,99 @@ server.registerTool("read_pipeline", {
   }
 });
 
+// ── update_row (expanded to all columns) ──
 server.registerTool("update_row", {
   title: "Update Pipeline Row",
-  description: "Update fields on a Pipeline Sheet row matched by video_id. Supports: status, script_url, voiceover_url, video_url, thumbnail_url, youtube_url, publish_date.",
+  description: "Update fields on a Pipeline Sheet row matched by video_id. Supports: status, script_url, voiceover_url, video_url, thumbnail_url, youtube_url, publish_date, hook_angle, content_pillar, target_keyword, script_body, hook_score, avatar_hook_url, avatar_cta_url, thumbnail_status, primary_keyword, topic_summary, total_score, title, created_at.",
   inputSchema: {
     video_id: z.string().min(1).describe("The video_id to match"),
     status: z.string().optional().describe("New status value"),
+    title: z.string().optional().describe("Video title"),
+    created_at: z.string().optional().describe("Created timestamp"),
+    hook_angle: z.string().optional().describe("Hook angle/reasoning"),
+    content_pillar: z.string().optional().describe("Content pillar category"),
+    target_keyword: z.string().optional().describe("Target keyword"),
     script_url: z.string().optional().describe("Script URL"),
+    script_body: z.string().optional().describe("Script body text"),
+    hook_score: z.string().optional().describe("Hook score"),
     voiceover_url: z.string().optional().describe("Voiceover URL"),
+    avatar_hook_url: z.string().optional().describe("Avatar hook clip URL"),
+    avatar_cta_url: z.string().optional().describe("Avatar CTA clip URL"),
     video_url: z.string().optional().describe("Video URL"),
     thumbnail_url: z.string().optional().describe("Thumbnail URL"),
+    thumbnail_status: z.string().optional().describe("Thumbnail status"),
     youtube_url: z.string().optional().describe("YouTube URL"),
     publish_date: z.string().optional().describe("Publish date"),
+    primary_keyword: z.string().optional().describe("Primary keyword"),
+    topic_summary: z.string().optional().describe("Topic summary"),
+    total_score: z.string().optional().describe("Total score"),
   },
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-}, async ({ video_id, status, script_url, voiceover_url, video_url, thumbnail_url, youtube_url, publish_date }) => {
+}, async (params) => {
   try {
-    const updates: Record<string, string> = { video_id };
-    if (status !== undefined) updates.status = status;
-    if (script_url !== undefined) updates.script_url = script_url;
-    if (voiceover_url !== undefined) updates.voiceover_url = voiceover_url;
-    if (video_url !== undefined) updates.video_url = video_url;
-    if (thumbnail_url !== undefined) updates.thumbnail_url = thumbnail_url;
-    if (youtube_url !== undefined) updates.youtube_url = youtube_url;
-    if (publish_date !== undefined) updates.publish_date = publish_date;
+    const updates: Record<string, string> = { video_id: params.video_id };
+    const allFields = [
+      "status", "title", "created_at", "hook_angle", "content_pillar",
+      "target_keyword", "script_url", "script_body", "hook_score",
+      "voiceover_url", "avatar_hook_url", "avatar_cta_url", "video_url",
+      "thumbnail_url", "thumbnail_status", "youtube_url", "publish_date",
+      "primary_keyword", "topic_summary", "total_score"
+    ];
+    for (const field of allFields) {
+      if ((params as Record<string, unknown>)[field] !== undefined) {
+        updates[field] = String((params as Record<string, unknown>)[field]);
+      }
+    }
     const fieldsUpdated = Object.keys(updates).filter((k) => k !== "video_id");
     if (fieldsUpdated.length === 0) return { content: [{ type: "text", text: "No fields to update." }], isError: true };
     const result = await callWebhook(WEBHOOK.UPDATE, updates);
-    return { content: [{ type: "text", text: JSON.stringify({ success: true, video_id, fields_updated: fieldsUpdated, result }, null, 2) }] };
+    return { content: [{ type: "text", text: JSON.stringify({ success: true, video_id: params.video_id, fields_updated: fieldsUpdated, result }, null, 2) }] };
   } catch (err) {
     return { content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
   }
 });
 
+// ── delete_rows ──
+server.registerTool("delete_rows", {
+  title: "Delete Pipeline Rows",
+  description: "Delete rows from the Pipeline Sheet matching a column value. Deletes ONE matching row per call — call multiple times for bulk deletion. Use column='video_id' and value='V2-Jun3-1' to delete by video_id, or column='status' and value='Skipped' to delete by status.",
+  inputSchema: {
+    column: z.string().min(1).describe("Column name to match (e.g. video_id, status, title)"),
+    value: z.string().min(1).describe("Value to match in the specified column"),
+  },
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+}, async ({ column, value }) => {
+  try {
+    const result = await callWebhook(WEBHOOK.MANAGE, { action: "delete", column, value });
+    return { content: [{ type: "text", text: JSON.stringify({ success: true, action: "delete_rows", column, value, result }, null, 2) }] };
+  } catch (err) {
+    return { content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+  }
+});
+
+// ── clear_sheet ──
+server.registerTool("clear_sheet", {
+  title: "Clear Pipeline Sheet",
+  description: "Wipe ALL data rows from the Pipeline Sheet. Headers are preserved. Use with caution — this deletes all pipeline data. Requires confirm=true.",
+  inputSchema: {
+    confirm: z.boolean().describe("Must be true to execute. Safety gate."),
+  },
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+}, async ({ confirm }) => {
+  try {
+    if (!confirm) return { content: [{ type: "text", text: "Clear aborted. Set confirm=true to execute." }] };
+    const result = await callWebhook(WEBHOOK.MANAGE, { action: "clear" });
+    return { content: [{ type: "text", text: JSON.stringify({ success: true, action: "clear_sheet", message: "All data rows cleared. Headers preserved.", result }, null, 2) }] };
+  } catch (err) {
+    return { content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+  }
+});
+
+// ── trigger_workflow ──
 server.registerTool("trigger_workflow", {
   title: "Trigger Pipeline Workflow",
-  description: "Trigger a Vault pipeline workflow (W1-W6) by name or ID. Fire-and-forget.",
-  inputSchema: { workflow: z.string().min(1).describe("Workflow name (W1-W6) or full workflow ID") },
+  description: "Trigger a Vault pipeline workflow (W1-W6, V2-W1) by name or ID. Fire-and-forget.",
+  inputSchema: { workflow: z.string().min(1).describe("Workflow name (W1-W6, V2-W1) or full workflow ID") },
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 }, async ({ workflow: wf }) => {
   try {
@@ -164,6 +230,7 @@ server.registerTool("trigger_workflow", {
   }
 });
 
+// ── get_execution ──
 server.registerTool("get_execution", {
   title: "Get Execution Details",
   description: "Get execution data from n8n by execution ID with optional node-level detail.",
@@ -201,6 +268,7 @@ server.registerTool("get_execution", {
   }
 });
 
+// ── pipeline_health ──
 server.registerTool("pipeline_health", {
   title: "Pipeline Health Dashboard",
   description: "Summary of Vault Pipeline: status counts, actionable items (ready for W3/W4/W5), recent executions.",
@@ -235,7 +303,7 @@ async function main(): Promise<void> {
   if (!N8N_API_KEY) console.error("WARNING: N8N_API_KEY not set");
   const app = express();
   app.use(express.json());
-  app.get("/health", (_req, res) => { res.json({ status: "ok", server: "vault-pipeline-mcp", version: "1.0.0" }); });
+  app.get("/health", (_req, res) => { res.json({ status: "ok", server: "vault-pipeline-mcp", version: "1.1.0" }); });
   app.post("/mcp", async (req, res) => {
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on("close", () => transport.close());
@@ -243,7 +311,7 @@ async function main(): Promise<void> {
     await transport.handleRequest(req, res, req.body);
   });
   app.listen(PORT, () => {
-    console.error(`Vault Pipeline MCP server running on http://localhost:${PORT}/mcp`);
+    console.error(`Vault Pipeline MCP server v1.1.0 running on http://localhost:${PORT}/mcp`);
     console.error(`Health check: http://localhost:${PORT}/health`);
     console.error(`n8n base: ${N8N_BASE_URL}`);
   });
